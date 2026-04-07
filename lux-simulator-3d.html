@@ -1,0 +1,2029 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Lux Simulator — 7×11 ft Wall</title>
+
+  <!-- ─────────────────────────────────────────────────────────────────────────
+       DEPENDENCIES
+       Three.js r128  – 3D scene, wall mesh, light cone helpers
+       OrbitControls  – loaded manually below (not bundled in r128 CDN build)
+  ───────────────────────────────────────────────────────────────────────── -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f14;
+      --surface:   #161a22;
+      --border:    rgba(255,255,255,0.08);
+      --text:      #e8eaf0;
+      --muted:     #7a8094;
+      --accent:    #5b9cf6;
+      --accent2:   #f0a05a;
+      --radius:    8px;
+      --panel-w:   280px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    #app {
+      display: grid;
+      grid-template-columns: 1fr var(--panel-w);
+      grid-template-rows: 40px 1fr;
+      height: 100vh;
+    }
+
+    /* viewport and zone-view share the same grid cell; tabs float above both */
+    #viewport, #zone-view {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+    }
+
+    /* wrapper that holds tabs + the two swappable views */
+    #main-area {
+      grid-column: 1;
+      grid-row: 2;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #view-tabs {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 36px;
+      z-index: 10;
+    }
+
+    #viewport, #zone-view {
+      top: 36px;
+    }
+
+    /* ── Top bar ──────────────────────────────────────────────────────────── */
+    #topbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    #topbar h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--text);
+    }
+
+    #topbar .pill {
+      font-size: 11px;
+      background: rgba(91,156,246,0.15);
+      color: var(--accent);
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+
+    #topbar .spacer { flex: 1; }
+
+    #topbar .tip {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── 3D viewport ──────────────────────────────────────────────────────── */
+    #viewport {
+      position: relative;
+      overflow: hidden;
+    }
+
+    #viewport canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* Floating readout that follows cursor */
+    #cursor-info {
+      position: absolute;
+      background: rgba(13,15,20,0.92);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      font-size: 12px;
+      pointer-events: none;
+      display: none;
+      white-space: nowrap;
+      z-index: 10;
+    }
+
+    /* ── Side panel ───────────────────────────────────────────────────────── */
+    #panel {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-section {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    /* ── Panel top: tabbed light-list / bulb-picker ──────────────────────── */
+    #panel-top {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;          /* never shrink — always visible */
+      height: 210px;           /* fixed height; controls get everything below */
+      border-bottom: 1px solid var(--border);
+    }
+
+    #panel-top-tabs {
+      display: flex;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ptab {
+      flex: 1;
+      padding: 7px 0;
+      font-size: 11px;
+      font-weight: 500;
+      text-align: center;
+      cursor: pointer;
+      color: var(--muted);
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .ptab:hover  { color: var(--text); }
+    .ptab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    .ptab-pane {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 14px;
+      gap: 0;
+      min-height: 0;
+    }
+    .ptab-pane.active { display: flex; }
+
+    /* Light list — scrolls inside the pane */
+    #light-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      margin-bottom: 8px;
+    }
+
+    /* Bulb picker — scrolls inside the pane */
+    #bulb-picker {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    /* ── Light list rows ──────────────────────────────────────────────────── */
+
+    .light-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+
+    .light-row:hover { background: rgba(255,255,255,0.04); }
+    .light-row.selected { border-color: var(--accent); background: rgba(91,156,246,0.06); }
+
+    .light-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .light-name { flex: 1; font-size: 12px; }
+
+    .light-del {
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+    }
+    .light-del:hover { color: #f06060; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────────── */
+    .btn-row { display: flex; gap: 6px; margin-top: 8px; }
+
+    .btn {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .btn:hover { background: rgba(255,255,255,0.06); }
+    .btn.primary { border-color: var(--accent); color: var(--accent); }
+    .btn.primary:hover { background: rgba(91,156,246,0.12); }
+
+    /* ── Sliders ──────────────────────────────────────────────────────────── */
+    .ctrl { margin-bottom: 10px; }
+
+    .ctrl-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .ctrl-header label { color: var(--muted); }
+    .ctrl-header .val  { font-weight: 600; color: var(--text); }
+
+    input[type="range"] {
+      width: 100%;
+      height: 4px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* ── Stats grid ───────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .stat-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+    }
+
+    .stat-card .slabel { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+    .stat-card .sval   { font-size: 17px; font-weight: 600; }
+
+    /* ── Lux legend ───────────────────────────────────────────────────────── */
+    #legend-bar {
+      height: 10px;
+      border-radius: 4px;
+      background: linear-gradient(to right,
+        #000022, #0000cc, #00cccc, #00ff44,
+        #ccff00, #ffaa00, #ff2200, #ffffff);
+      margin-bottom: 4px;
+    }
+
+    .legend-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    /* ── Reference table ──────────────────────────────────────────────────── */
+    .ref-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      font-size: 11px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ref-row:last-child { border-bottom: none; }
+    .ref-row .rv { color: var(--accent2); font-weight: 600; }
+
+    /* ── Scrollable lower panel ───────────────────────────────────────────── */
+    #panel-scroll {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    /* ── Bulb picker rows ─────────────────────────────────────────────────── */
+    .bulb-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.12s;
+      user-select: none;
+    }
+    .bulb-option:hover { background: rgba(255,255,255,0.04); }
+    .bulb-option.active {
+      border-color: var(--accent);
+      background: rgba(91,156,246,0.08);
+    }
+    .bulb-radio {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      border: 1.5px solid var(--muted);
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .bulb-option.active .bulb-radio {
+      border-color: var(--accent);
+      background: var(--accent);
+      box-shadow: inset 0 0 0 2.5px var(--surface);
+    }
+    .bulb-info { flex: 1; }
+    .bulb-info .bname { font-size: 12px; font-weight: 500; }
+    .bulb-info .bdetail { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    /* ── Selected-light section visibility ───────────────────────────────── */
+    #sel-section { transition: opacity 0.2s; }
+    #sel-section.disabled { opacity: 0.35; pointer-events: none; }
+
+    /* ── View tabs ────────────────────────────────────────────────────────── */
+    #view-tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+
+    .view-tab {
+      flex: 1;
+      padding: 8px 0;
+      font-size: 12px;
+      font-weight: 500;
+      text-align: center;
+      cursor: pointer;
+      color: var(--muted);
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .view-tab:hover  { color: var(--text); }
+    .view-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* ── Zone view container ──────────────────────────────────────────────── */
+    #zone-view {
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #zone-view.visible { display: flex; }
+
+    #zone-canvas-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      background: #0a0c10;
+    }
+
+    /* Canvas is letterboxed: centered, preserves wall aspect ratio */
+    #zone-canvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      cursor: crosshair;
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+    }
+
+    #zone-cursor-info {
+      position: absolute;
+      background: rgba(13,15,20,0.92);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      font-size: 12px;
+      pointer-events: none;
+      display: none;
+      white-space: nowrap;
+      z-index: 10;
+    }
+
+    /* ── Zone legend strip ────────────────────────────────────────────────── */
+    #zone-legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 7px 14px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .zone-swatch {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .zone-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── Zone threshold controls ──────────────────────────────────────────── */
+    #zone-thresholds {
+      padding: 10px 14px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* ── Zone coverage bar ────────────────────────────────────────────────── */
+    #zone-coverage {
+      padding: 8px 14px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .cov-bar-wrap {
+      height: 10px;
+      border-radius: 5px;
+      overflow: hidden;
+      display: flex;
+      margin-top: 6px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .cov-seg { height: 100%; transition: width 0.3s; }
+
+    .cov-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 10px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
+  <header id="topbar">
+    <h1>3D Lux Simulator</h1>
+    <span class="pill" id="topbar-pill">SANSI 36W · 2680 lm · 60° beam</span>
+    <span class="spacer"></span>
+    <span class="tip">Orbit: left-drag &nbsp;|&nbsp; Pan: right-drag &nbsp;|&nbsp; Zoom: scroll &nbsp;|&nbsp; Place light: double-click scene</span>
+  </header>
+
+  <!-- ── Main area: tabs + 3D view + zone view ───────────────────────────── -->
+  <div id="main-area">
+
+    <!-- View tabs -->
+    <div id="view-tabs">
+      <button class="view-tab active" id="tab-3d"   onclick="switchView('3d')">3D Heatmap</button>
+      <button class="view-tab"        id="tab-zone" onclick="switchView('zone')">Zone Coverage</button>
+    </div>
+
+    <!-- 3D Viewport -->
+    <div id="viewport">
+      <div id="cursor-info"></div>
+    </div>
+
+    <!-- Zone View (flat 2D) -->
+    <div id="zone-view">
+      <div id="zone-canvas-wrap">
+        <canvas id="zone-canvas"></canvas>
+        <div id="zone-cursor-info"></div>
+      </div>
+      <div id="zone-legend">
+        <div class="zone-swatch"><div class="zone-dot" style="background:#22c55e"></div><span id="leg-good">Good (&gt;2000 lx)</span></div>
+        <div class="zone-swatch"><div class="zone-dot" style="background:#eab308"></div><span id="leg-min">Min (1000–2000 lx)</span></div>
+        <div class="zone-swatch"><div class="zone-dot" style="background:#ef4444"></div><span id="leg-insuf">Insufficient (&lt;1000 lx)</span></div>
+      </div>
+      <div id="zone-thresholds">
+        <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;">Thresholds</div>
+        <div class="ctrl" style="margin-bottom:8px;">
+          <div class="ctrl-header">
+            <label>Good threshold (lux)</label>
+            <span class="val" id="v-thresh-good">2000</span>
+          </div>
+          <input type="range" id="sl-thresh-good" min="100" max="10000" step="100" value="2000">
+        </div>
+        <div class="ctrl" style="margin-bottom:0;">
+          <div class="ctrl-header">
+            <label>Min threshold (lux)</label>
+            <span class="val" id="v-thresh-min">1000</span>
+          </div>
+          <input type="range" id="sl-thresh-min" min="50" max="5000" step="50" value="1000">
+        </div>
+      </div>
+      <div id="zone-coverage">
+        <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);">Coverage</div>
+        <div class="cov-bar-wrap">
+          <div class="cov-seg" id="cov-good"  style="background:#22c55e;width:0%"></div>
+          <div class="cov-seg" id="cov-min"   style="background:#eab308;width:0%"></div>
+          <div class="cov-seg" id="cov-insuf" style="background:#ef4444;width:0%"></div>
+        </div>
+        <div class="cov-labels">
+          <span id="cov-good-pct"  style="color:#22c55e">— good</span>
+          <span id="cov-min-pct"   style="color:#eab308">— min</span>
+          <span id="cov-insuf-pct" style="color:#ef4444">— insuf</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-area -->
+
+  <!-- ── Control Panel ────────────────────────────────────────────────────── -->
+  <aside id="panel">
+
+    <!-- ── Top pane: tabbed between light list and bulb picker ───────────── -->
+    <div id="panel-top">
+      <div id="panel-top-tabs">
+        <button class="ptab active" id="ptab-lights" onclick="switchPanelTab('lights')">Lights</button>
+        <button class="ptab"        id="ptab-bulb"   onclick="switchPanelTab('bulb')">Bulb model</button>
+      </div>
+
+      <!-- Light list pane -->
+      <div class="ptab-pane active" id="ppane-lights">
+        <div id="light-list"><p style="color:var(--muted);font-size:12px">Double-click scene to add</p></div>
+        <div class="btn-row">
+          <button class="btn primary" id="btn-add">+ Add light</button>
+          <button class="btn" id="btn-clear">Clear all</button>
+        </div>
+      </div>
+
+      <!-- Bulb picker pane -->
+      <div class="ptab-pane" id="ppane-bulb">
+        <div id="bulb-picker" style="display:flex;flex-direction:column;gap:5px;"></div>
+      </div>
+    </div>
+
+    <div id="panel-scroll">
+
+      <!-- Selected light controls -->
+      <div class="panel-section" id="sel-section">
+        <div class="section-label">Selected light</div>
+
+        <!-- Per-light bulb model switch -->
+        <div class="ctrl" style="margin-bottom:12px;">
+          <div class="ctrl-header" style="margin-bottom:6px;"><label>Bulb model</label></div>
+          <div id="sel-bulb-picker" style="display:flex;flex-direction:column;gap:5px;"></div>
+        </div>
+        <div class="ctrl">
+          <div class="ctrl-header"><label>X position (ft)</label><span class="val" id="v-x">5.5</span></div>
+          <input type="range" id="sl-x" min="0" max="11" step="0.1" value="5.5">
+        </div>
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Y height (ft)</label><span class="val" id="v-y">7.0</span></div>
+          <input type="range" id="sl-y" min="0" max="12" step="0.1" value="7">
+        </div>
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Z distance from wall (ft)</label><span class="val" id="v-z">3.0</span></div>
+          <input type="range" id="sl-z" min="0.5" max="12" step="0.1" value="3">
+        </div>
+
+        <!-- Aiming -->
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Pan (horizontal aim °)</label><span class="val" id="v-pan">0°</span></div>
+          <input type="range" id="sl-pan" min="-75" max="75" step="1" value="0">
+        </div>
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Tilt (vertical aim °)</label><span class="val" id="v-tilt">0°</span></div>
+          <input type="range" id="sl-tilt" min="-75" max="75" step="1" value="0">
+        </div>
+
+        <!-- Optics -->
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Beam angle</label><span class="val" id="v-beam">60°</span></div>
+          <input type="range" id="sl-beam" min="10" max="120" step="1" value="60">
+        </div>
+        <div class="ctrl">
+          <div class="ctrl-header"><label>Brightness</label><span class="val" id="v-bright">100%</span></div>
+          <input type="range" id="sl-bright" min="5" max="100" step="1" value="100">
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="panel-section">
+        <div class="section-label">Wall stats</div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="slabel">Peak lux</div><div class="sval" id="stat-peak">—</div></div>
+          <div class="stat-card"><div class="slabel">Avg lux</div><div class="sval" id="stat-avg">—</div></div>
+          <div class="stat-card"><div class="slabel">Min lux</div><div class="sval" id="stat-min">—</div></div>
+          <div class="stat-card"><div class="slabel">Uniformity</div><div class="sval" id="stat-uni">—</div></div>
+        </div>
+      </div>
+
+      <!-- Colormap legend -->
+      <div class="panel-section">
+        <div class="section-label">Lux colormap</div>
+        <div id="legend-bar"></div>
+        <div class="legend-labels">
+          <span>0</span><span id="leg-mid">—</span><span id="leg-max">—</span>
+        </div>
+      </div>
+
+      <!-- Reference values -->
+      <div class="panel-section">
+        <div class="section-label">Lux reference</div>
+        <div class="ref-row"><span>Full sunlight</span><span class="rv">32,000+</span></div>
+        <div class="ref-row"><span>Plant growth (good)</span><span class="rv">2,000–5,000</span></div>
+        <div class="ref-row"><span>Plant growth (min)</span><span class="rv">1,000–2,000</span></div>
+        <div class="ref-row"><span>Bright office</span><span class="rv">300–500</span></div>
+        <div class="ref-row"><span>Reading light</span><span class="rv">200–300</span></div>
+        <div class="ref-row"><span>Living room</span><span class="rv">50–150</span></div>
+      </div>
+
+    </div><!-- /panel-scroll -->
+  </aside>
+</div><!-- /app -->
+
+<!-- ── OrbitControls (inline, r128-compatible) ──────────────────────────── -->
+<script>
+/**
+ * OrbitControls — Three.js r128
+ * Minimal inline implementation (pan, orbit, zoom).
+ * Kept as a named class so Codex can parse it cleanly.
+ */
+THREE.OrbitControls = class OrbitControls {
+  constructor(camera, domElement) {
+    this.camera     = camera;
+    this.domElement = domElement;
+    this.target     = new THREE.Vector3();
+    this.enableDamping = false;
+
+    // Internal state
+    this._spherical     = new THREE.Spherical();
+    this._sphericalDelta= new THREE.Spherical();
+    this._scale         = 1;
+    this._panOffset     = new THREE.Vector3();
+    this._dragging      = false;
+    this._rightDrag     = false;
+    this._lastMouse     = { x: 0, y: 0 };
+    this._rotateSpeed   = 0.005;
+    this._panSpeed      = 0.003;
+    this._zoomSpeed     = 0.1;
+
+    // Bootstrap spherical from camera position
+    const offset = new THREE.Vector3().subVectors(camera.position, this.target);
+    this._spherical.setFromVector3(offset);
+
+    this._onMouseDown  = this._onMouseDown.bind(this);
+    this._onMouseMove  = this._onMouseMove.bind(this);
+    this._onMouseUp    = this._onMouseUp.bind(this);
+    this._onWheel      = this._onWheel.bind(this);
+    this._onContext    = e => e.preventDefault();
+
+    domElement.addEventListener('mousedown',      this._onMouseDown);
+    domElement.addEventListener('wheel',          this._onWheel,   { passive: false });
+    domElement.addEventListener('contextmenu',    this._onContext);
+    window.addEventListener('mousemove',          this._onMouseMove);
+    window.addEventListener('mouseup',            this._onMouseUp);
+  }
+
+  _onMouseDown(e) {
+    this._dragging   = true;
+    this._rightDrag  = e.button === 2;
+    this._lastMouse  = { x: e.clientX, y: e.clientY };
+  }
+
+  _onMouseMove(e) {
+    if (!this._dragging) return;
+    const dx = e.clientX - this._lastMouse.x;
+    const dy = e.clientY - this._lastMouse.y;
+    this._lastMouse = { x: e.clientX, y: e.clientY };
+
+    if (this._rightDrag) {
+      // Pan
+      const dist = this._spherical.radius;
+      const panX = -dx * dist * this._panSpeed;
+      const panY =  dy * dist * this._panSpeed;
+      const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+      const up    = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
+      this._panOffset.addScaledVector(right, panX).addScaledVector(up, panY);
+    } else {
+      // Orbit
+      this._sphericalDelta.theta -= dx * this._rotateSpeed;
+      this._sphericalDelta.phi   -= dy * this._rotateSpeed;
+    }
+    this.update();
+  }
+
+  _onMouseUp() { this._dragging = false; }
+
+  _onWheel(e) {
+    e.preventDefault();
+    this._scale *= (e.deltaY > 0) ? (1 + this._zoomSpeed) : (1 - this._zoomSpeed);
+    this.update();
+  }
+
+  update() {
+    this._spherical.theta += this._sphericalDelta.theta;
+    this._spherical.phi   += this._sphericalDelta.phi;
+    // Clamp phi to avoid flipping
+    this._spherical.phi = Math.max(0.05, Math.min(Math.PI - 0.05, this._spherical.phi));
+    this._spherical.radius *= this._scale;
+    this._spherical.radius = Math.max(1, Math.min(80, this._spherical.radius));
+
+    this.target.add(this._panOffset);
+    const offset = new THREE.Vector3().setFromSpherical(this._spherical);
+    this.camera.position.copy(this.target).add(offset);
+    this.camera.lookAt(this.target);
+
+    // Reset deltas
+    this._sphericalDelta.set(0, 0, 0);
+    this._scale      = 1;
+    this._panOffset.set(0, 0, 0);
+  }
+
+  dispose() {
+    this.domElement.removeEventListener('mousedown',   this._onMouseDown);
+    this.domElement.removeEventListener('wheel',       this._onWheel);
+    this.domElement.removeEventListener('contextmenu', this._onContext);
+    window.removeEventListener('mousemove',            this._onMouseMove);
+    window.removeEventListener('mouseup',              this._onMouseUp);
+  }
+};
+</script>
+
+<!-- ── Main simulation ───────────────────────────────────────────────────── -->
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   All physical constants and scene dimensions live here for easy editing.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/** Wall dimensions in feet */
+const WALL_W_FT = 11;
+const WALL_H_FT = 7;
+
+/**
+ * Bulb catalog — add entries here to support more models.
+ * lumens : total luminous flux (lm)
+ *           Miracle-Gro: derived from PPF ratio vs SANSI
+ *           (SANSI: 65.6 µmol/s → 2680 lm  →  lm/PPF ≈ 40.9)
+ *           Miracle-Gro: 30 PPF × 40.9 ≈ 1226 lm
+ * beamDeg: half-power beam angle (degrees)
+ *           SANSI: published 60°
+ *           Miracle-Gro MG-PCG15-RBW: 79.1° full beam (39.6° half)
+ *           derived from measured centre-beam lux at 1ft = 7700 lux
+ *           using cosine-power model: n = 2π·I_peak/lumens - 1 = 2.67
+ *           halfBeam = arccos(0.5^(1/n)) = 39.6°
+ * ppf    : photosynthetic photon flux µmol/s (for display only)
+ * watts  : power draw (for display only)
+ *
+ * SANSI models: PPFD from manufacturer darkroom measurements (product images).
+ *   Converted to lux via 1 µmol/s/m² = 54 lux (full-spectrum 4000K).
+ *   All follow perfect inverse-square falloff (k = 2.000) — validated by the
+ *   36W published lumen output (2680 lm) matching the derived value (2683 lm).
+ *   Beam angle ~88° full derived from cosine-power model: n ≈ 2.12 for all.
+ *
+ * Miracle-Gro MG-PCG15-RBW: real measured lux at distance, non-inverse-square.
+ *
+ * measuredLux: [[dist_ft, centre_lux], ...] — log-log interpolated at runtime.
+ */
+const BULB_CATALOG = {
+
+  sansi_150w: {
+    id:      'sansi_150w',
+    label:   'SANSI 13W (150W)',
+    detail:  '988 lm · 88° beam · 13W',
+    lumens:  988,
+    beamDeg: 87.6,
+    ppf:     null,
+    watts:   13,
+    measuredLux: [
+      [1, 5287],
+      [2, 1322],
+      [3,  588],
+      [4,  330],
+    ],
+  },
+
+  sansi_200w: {
+    id:      'sansi_200w',
+    label:   'SANSI 18W (200W)',
+    detail:  '1544 lm · 88° beam · 18W',
+    lumens:  1544,
+    beamDeg: 87.6,
+    ppf:     null,
+    watts:   18,
+    measuredLux: [
+      [1, 8262],
+      [2, 2214],
+      [3,  918],
+      [4,  540],
+    ],
+  },
+
+  sansi_300w: {
+    id:      'sansi_300w',
+    label:   'SANSI 24W (300W)',
+    detail:  '1787 lm · 88° beam · 24W',
+    lumens:  1787,
+    beamDeg: 87.6,
+    ppf:     null,
+    watts:   24,
+    measuredLux: [
+      [1,  9561],
+      [2,  2390],
+      [3,  1062],
+      [4,   598],
+    ],
+  },
+
+  sansi_400w: {
+    id:      'sansi_400w',
+    label:   'SANSI 36W (400W)',
+    detail:  '2680 lm · 88° beam · 36W · 65.6 µmol/s PPF',
+    lumens:  2680,
+    beamDeg: 87.7,
+    ppf:     65.6,
+    watts:   36,
+    measuredLux: [
+      [1, 14341],
+      [2,  3586],
+      [3,  1594],
+      [4,   896],
+    ],
+  },
+
+  miraclegro: {
+    id:      'miraclegro',
+    label:   'Miracle-Gro 15W',
+    detail:  '1226 lm · 79° beam · 15W · 30 µmol/s PPF',
+    lumens:  1226,
+    beamDeg: 79.1,
+    ppf:     30,
+    watts:   15,
+    // Measured centre-beam lux — does NOT follow inverse-square (k ≈ 1.86).
+    measuredLux: [
+      [0.5,  22000],
+      [1.0,   7700],
+      [1.5,   3400],
+      [2.0,   2000],
+      [2.5,   1200],
+      [3.0,    860],
+      [3.5,    680],
+      [4.0,    500],
+      [4.5,    410],
+      [5.0,    340],
+      [5.5,    290],
+      [6.0,    240],
+      [6.5,    210],
+      [7.0,    180],
+    ],
+  },
+
+};
+
+/** Currently selected bulb model — applied to newly created lights */
+let activeBulbId = 'sansi_400w';
+
+// Legacy scalar aliases — point at the 36W model for backward-compat
+const BULB_LUMENS   = BULB_CATALOG.sansi_400w.lumens;
+const BULB_BEAM_DEG = BULB_CATALOG.sansi_400w.beamDeg;
+
+/** Heatmap texture resolution (texels per foot) */
+const TEXELS_PER_FT = 20;
+
+/** Coordinate convention:
+ *  X → along wall width  (0 = left edge,  WALL_W_FT = right edge)
+ *  Y → wall height       (0 = floor,      WALL_H_FT = top)
+ *  Z → depth from wall   (0 = wall plane, positive = toward viewer)
+ *  The wall sits at Z = 0.
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════════════════════ */
+
+/** @type {LightSource[]} */
+const lights = [];
+let selectedLight = null;
+let nextLightId   = 1;
+let maxLuxCache   = 1;   // updated each render pass
+
+/** Light source color palette */
+const SWATCHES = ['#5b9cf6','#f0a05a','#81d87c','#e06cba','#79d8d8','#f5c842','#c084fc','#f87171'];
+let swatchIdx = 0;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THREE.JS SETUP
+═══════════════════════════════════════════════════════════════════════════ */
+
+const viewport = document.getElementById('viewport');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0d0f14);
+renderer.shadowMap.enabled = false;
+viewport.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
+camera.position.set(WALL_W_FT / 2, WALL_H_FT / 2, 22);
+camera.lookAt(WALL_W_FT / 2, WALL_H_FT / 2, 0);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(WALL_W_FT / 2, WALL_H_FT / 2, 0);
+controls.update();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCENE GEOMETRY
+═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Wall mesh ──────────────────────────────────────────────────────────────
+
+const TEX_W = Math.round(WALL_W_FT * TEXELS_PER_FT);
+const TEX_H = Math.round(WALL_H_FT * TEXELS_PER_FT);
+
+/** Raw RGBA pixel buffer for the heatmap texture */
+const heatData = new Uint8Array(TEX_W * TEX_H * 4);
+const heatTex  = new THREE.DataTexture(heatData, TEX_W, TEX_H, THREE.RGBAFormat);
+heatTex.needsUpdate = true;
+
+const wallGeo = new THREE.PlaneGeometry(WALL_W_FT, WALL_H_FT);
+const wallMat = new THREE.MeshBasicMaterial({ map: heatTex, side: THREE.FrontSide });
+const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+wallMesh.position.set(WALL_W_FT / 2, WALL_H_FT / 2, 0);
+scene.add(wallMesh);
+
+// ── Wall border (wireframe outline) ───────────────────────────────────────
+(function addWallBorder() {
+  const pts = [
+    new THREE.Vector3(0,           0,           0.002),
+    new THREE.Vector3(WALL_W_FT,   0,           0.002),
+    new THREE.Vector3(WALL_W_FT,   WALL_H_FT,   0.002),
+    new THREE.Vector3(0,           WALL_H_FT,   0.002),
+    new THREE.Vector3(0,           0,           0.002),
+  ];
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color: 0x3a4060 });
+  scene.add(new THREE.Line(geo, mat));
+})();
+
+// ── Floor grid ─────────────────────────────────────────────────────────────
+(function addFloorGrid() {
+  const gridHelper = new THREE.GridHelper(20, 20, 0x1e2336, 0x1e2336);
+  gridHelper.position.set(WALL_W_FT / 2, 0, 5);
+  gridHelper.rotation.x = 0;
+  scene.add(gridHelper);
+})();
+
+// ── Ambient scene light (just enough to see the cones) ────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHOTOMETRIC LOOKUP — LOG-LOG INTERPOLATION
+   For bulbs with measuredLux tables, we use log-log interpolation of the
+   centre-beam intensity instead of the inverse-square law.  This exactly
+   reproduces the manufacturer's published distance-vs-lux data.
+   The angular falloff (cosine-power) is then multiplied on top.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Build a precomputed log-log lookup from a measuredLux array.
+ * Returns an object with logDists and logLux Float64Arrays for fast interp.
+ *
+ * @param {Array<[number,number]>} measuredLux  [[dist_ft, lux], ...]
+ * @returns {{ logDists: Float64Array, logLux: Float64Array }}
+ */
+function buildLuxLookup(measuredLux) {
+  const logDists = new Float64Array(measuredLux.map(([d]) => Math.log(d)));
+  const logLux   = new Float64Array(measuredLux.map(([, l]) => Math.log(l)));
+  return { logDists, logLux };
+}
+
+/**
+ * Interpolate centre-beam lux at dist_ft using the precomputed log-log table.
+ * Clamps to the nearest endpoint outside the measured range.
+ *
+ * @param {number}      dist_ft   3D distance from bulb to wall point (feet)
+ * @param {{ logDists: Float64Array, logLux: Float64Array }} lookup
+ * @returns {number}   centre-beam lux at that distance
+ */
+function lookupCentreBeamLux(dist_ft, lookup) {
+  const logD = Math.log(Math.max(dist_ft, 1e-6));
+  const { logDists, logLux } = lookup;
+  const n = logDists.length;
+
+  // Clamp below / above range
+  if (logD <= logDists[0])     return Math.exp(logLux[0]);
+  if (logD >= logDists[n - 1]) return Math.exp(logLux[n - 1]);
+
+  // Binary search for bracket
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (logDists[mid] <= logD) lo = mid; else hi = mid;
+  }
+
+  // Linear interpolation in log-log space
+  const t   = (logD - logDists[lo]) / (logDists[hi] - logDists[lo]);
+  const logL = logLux[lo] + t * (logLux[hi] - logLux[lo]);
+  return Math.exp(logL);
+}
+
+// Pre-build lookups for any bulb that has measuredLux data
+Object.values(BULB_CATALOG).forEach(bulb => {
+  bulb._lookup = bulb.measuredLux ? buildLuxLookup(bulb.measuredLux) : null;
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT SOURCE CLASS
+   Each instance wraps all data + Three.js helper objects for one bulb.
+═══════════════════════════════════════════════════════════════════════════ */
+
+class LightSource {
+  /**
+   * @param {number} x   - wall X position (ft)
+   * @param {number} y   - wall Y position (ft)
+   * @param {number} z   - distance from wall (ft)
+   * @param {string} color  - CSS hex color for UI / cone tint
+   * @param {string} [bulbId] - key into BULB_CATALOG (defaults to activeBulbId)
+   */
+  constructor(x, y, z, color, bulbId) {
+    this.id         = nextLightId++;
+    this.name       = `Light ${this.id}`;
+    this.color      = color;
+
+    // Position in scene feet
+    this.x = x;
+    this.y = y;
+    this.z = z;
+
+    // Aiming angles (degrees).
+    // pan  = horizontal rotation around Y axis (+right, -left)
+    // tilt = vertical rotation around X axis   (+up,    -down)
+    this.pan  = 0;
+    this.tilt = 0;
+
+    // Optics — driven by the chosen bulb model
+    this.bulbId     = bulbId || activeBulbId;
+    const bulb      = BULB_CATALOG[this.bulbId];
+    this.beamDeg    = bulb.beamDeg;
+    this.lumens     = bulb.lumens;
+    this.brightness = 100;   // percent
+
+    // ── Three.js helpers ───────────────────────────────────────────────────
+    const threeColor = new THREE.Color(color);
+
+    // Sphere marker at the bulb position
+    const sphereGeo = new THREE.SphereGeometry(0.18, 12, 12);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: threeColor });
+    this.sphere = new THREE.Mesh(sphereGeo, sphereMat);
+
+    // Cone visualising the beam
+    this.coneGroup = new THREE.Group();
+    this._buildCone(threeColor);
+
+    scene.add(this.sphere);
+    scene.add(this.coneGroup);
+
+    this._updateTransforms();
+  }
+
+  // ── Private: build cone as lines radiating from bulb tip ─────────────────
+  // Using ConeGeometry always shows a hollow tube from certain angles.
+  // Instead we draw N spokes from the tip to the rim, plus a circle at the rim.
+  _buildCone(threeColor) {
+    this.coneGroup.clear();
+
+    const halfRad  = (this.beamDeg / 2) * Math.PI / 180;
+    const coneLen  = 3.0;                        // length of beam visual
+    const rimRad   = Math.tan(halfRad) * coneLen; // radius at the open end
+    const SPOKES   = 24;                          // number of radial lines
+    const mat      = new THREE.LineBasicMaterial({
+      color: threeColor,
+      transparent: true,
+      opacity: 0.35,
+    });
+
+    // ── Spokes: tip (0,0,0) → rim points ──────────────────────────────────
+    for (let i = 0; i < SPOKES; i++) {
+      const angle = (i / SPOKES) * Math.PI * 2;
+      const rx    = Math.cos(angle) * rimRad;
+      const ry    = Math.sin(angle) * rimRad;
+      // Cone points toward -Z in local space (wall is at -Z from bulb)
+      const pts   = [
+        new THREE.Vector3(0,  0,  0),
+        new THREE.Vector3(rx, ry, -coneLen),
+      ];
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      this.coneGroup.add(new THREE.Line(geo, mat));
+    }
+
+    // ── Rim circle at the open end ─────────────────────────────────────────
+    const rimPts = [];
+    const RIM_SEGS = 64;
+    for (let i = 0; i <= RIM_SEGS; i++) {
+      const angle = (i / RIM_SEGS) * Math.PI * 2;
+      rimPts.push(new THREE.Vector3(
+        Math.cos(angle) * rimRad,
+        Math.sin(angle) * rimRad,
+        -coneLen
+      ));
+    }
+    const rimGeo = new THREE.BufferGeometry().setFromPoints(rimPts);
+    this.coneGroup.add(new THREE.Line(rimGeo, mat));
+  }
+
+  // ── Recompute Three.js object positions and rotations from this.* ─────────
+  _updateTransforms() {
+    const pos = new THREE.Vector3(this.x, this.y, this.z);
+    this.sphere.position.copy(pos);
+    this.coneGroup.position.copy(pos);
+
+    // The lux math (luxAt) defines the aim direction as:
+    //   aimX =  sin(pan) * cos(tilt)
+    //   aimY =  sin(tilt)
+    //   aimZ = -cos(pan) * cos(tilt)
+    //
+    // The cone's spokes point along local -Z.  We need a rotation R such that
+    // R * (0,0,-1) = (aimX, aimY, aimZ).
+    //
+    // Euler order YXZ:  first rotate around Y by angle A, then around X by angle B.
+    //   R * (0,0,-1) with Y-rot A then X-rot B gives:
+    //     x = -sin(A)*cos(B)
+    //     y =  sin(B)
+    //     z = -cos(A)*cos(B)
+    //
+    // Matching to aimX/Y/Z:
+    //   sin(pan)*cos(tilt)  = -sin(A)*cos(B)  →  A = -pan
+    //   sin(tilt)           =  sin(B)          →  B =  tilt
+    //   -cos(pan)*cos(tilt) = -cos(A)*cos(B)   ✓ consistent
+    //
+    // So: Euler('YXZ') with Y = -pan, X = tilt (both in radians).
+
+    const euler = new THREE.Euler(
+       this.tilt * Math.PI / 180,   // X rotation =  tilt
+      -this.pan  * Math.PI / 180,   // Y rotation = -pan
+      0,
+      'YXZ'
+    );
+    this.coneGroup.setRotationFromEuler(euler);
+  }
+
+  /**
+   * Compute lux contribution at a wall point (wx, wy) in feet.
+   * Wall is at Z = 0; light is at (this.x, this.y, this.z).
+   *
+   * Physics:
+   *   1. Find the 3D vector from the bulb to the wall point.
+   *   2. Find the bulb's aim direction (unit vector).
+   *   3. Compute the angle between them → angular falloff inside cone.
+   *   4. Apply inverse-square law on the 3D distance.
+   *
+   * @param {number} wx  wall X (ft)
+   * @param {number} wy  wall Y (ft)
+   * @returns {number}   lux at that point
+   */
+  luxAt(wx, wy) {
+    // Vector from bulb to wall point
+    const dx = wx - this.x;
+    const dy = wy - this.y;
+    const dz = 0  - this.z;   // wall at Z=0, bulb at Z=this.z
+    const distSq = dx*dx + dy*dy + dz*dz;
+    if (distSq < 0.0001) return 0;
+    const dist = Math.sqrt(distSq);
+
+    // Bulb aim direction (unit vector) accounting for pan + tilt
+    const panRad  =  this.pan  * Math.PI / 180;
+    const tiltRad = -this.tilt * Math.PI / 180;   // positive tilt = aim up
+    // Default aim = (0, 0, -1); rotate by Euler YXZ
+    const aimX =  Math.sin(panRad) * Math.cos(tiltRad);
+    const aimY =  Math.sin(tiltRad);
+    const aimZ = -Math.cos(panRad) * Math.cos(tiltRad);
+
+    // Angle between aim and bulb→point vector
+    const dot = (dx*aimX + dy*aimY + dz*aimZ) / dist;
+    const angleDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+
+    // Angular falloff: single smooth cosine-power function.
+    // n solved so cos(halfBeam)^n = 0.5  (half-power beam angle definition).
+    const halfBeam    = this.beamDeg / 2;
+    const halfBeamRad = halfBeam * Math.PI / 180;
+    const cosHalf     = Math.cos(halfBeamRad);
+    const n           = cosHalf < 0.9999 ? Math.log(0.5) / Math.log(cosHalf) : 1;
+    const cosAngle    = Math.cos(Math.min(angleDeg, 90) * Math.PI / 180);
+    const angleFactor = Math.max(0, Math.pow(cosAngle, n));
+
+    // Cosine-of-incidence: how obliquely the ray hits the wall plane (normal = +Z)
+    const cosIncidence = Math.abs(dz / dist);
+
+    const brightnessScale = this.brightness / 100;
+    const bulb = BULB_CATALOG[this.bulbId];
+
+    if (bulb._lookup) {
+      // ── Measured-data path (Miracle-Gro) ──────────────────────────────────
+      // Centre-beam lux is read from the log-log interpolation table, which
+      // exactly reproduces the manufacturer's distance-vs-lux measurements.
+      // Angular falloff and incidence correction are applied on top.
+      const centreLux = lookupCentreBeamLux(dist, bulb._lookup);
+      return centreLux * angleFactor * cosIncidence * brightnessScale;
+    } else {
+      // ── Physics model path (SANSI and any bulb without measured data) ──────
+      // Standard photometric model: intensity = lumens / solidAngle,
+      // then lux = intensity * angleFactor * cosIncidence / dist_m²
+      const solidAngle = 2 * Math.PI * (1 - Math.cos(halfBeamRad));
+      const intensity  = (this.lumens * brightnessScale) / solidAngle;
+      const distM2     = distSq * 0.0929;   // ft² → m²
+      return (intensity * angleFactor * cosIncidence) / distM2;
+    }
+  }
+
+  /**
+   * Switch this light to a different bulb model.
+   * Resets beam angle and lumens from catalog; brightness is preserved.
+   * @param {string} bulbId - key into BULB_CATALOG
+   */
+  setBulb(bulbId) {
+    const bulb   = BULB_CATALOG[bulbId];
+    if (!bulb) return;
+    this.bulbId  = bulbId;
+    this.beamDeg = bulb.beamDeg;
+    this.lumens  = bulb.lumens;
+    this.update();   // rebuild cone + transforms
+  }
+
+  /** Remove all Three.js objects from the scene */
+  dispose() {
+    scene.remove(this.sphere);
+    scene.remove(this.coneGroup);
+    this.sphere.geometry.dispose();
+    this.coneGroup.children.forEach(c => c.geometry.dispose());
+  }
+
+  /** Sync all Three.js helpers after property changes */
+  update() {
+    this._buildCone(new THREE.Color(this.color));
+    this._updateTransforms();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HEATMAP TEXTURE UPDATE
+   Recomputes lux at every texel, maps to a colour ramp, uploads to GPU.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Map a normalised value t ∈ [0,1] to an [R,G,B] array.
+ * Uses a perceptually ordered 8-stop rainbow ramp (dark-blue → white).
+ *
+ * @param {number} t  normalised lux value
+ * @returns {[number, number, number]}
+ */
+function luxToRGB(t) {
+  // 8 colour stops from 0 → 1
+  const stops = [
+    [0,   0,  34],   // 0.000 – deep navy
+    [0,   0, 204],   // 0.143 – blue
+    [0, 200, 255],   // 0.286 – cyan
+    [0, 255,  68],   // 0.429 – green
+    [200,255,  0],   // 0.571 – yellow-green
+    [255,170,  0],   // 0.714 – amber
+    [255, 34,  0],   // 0.857 – red
+    [255,255,255],   // 1.000 – white (peak)
+  ];
+  const scaled = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const i0 = Math.floor(scaled);
+  const i1 = Math.min(i0 + 1, stops.length - 1);
+  const f  = scaled - i0;
+  const a  = stops[i0];
+  const b  = stops[i1];
+  return [
+    Math.round(a[0] + (b[0]-a[0]) * f),
+    Math.round(a[1] + (b[1]-a[1]) * f),
+    Math.round(a[2] + (b[2]-a[2]) * f),
+  ];
+}
+
+/** Format a lux value with appropriate precision */
+function fmt(v) {
+  if (v >= 10000) return Math.round(v / 100) * 100 + '';
+  if (v >= 1000)  return Math.round(v / 10)  *  10 + '';
+  if (v >= 100)   return Math.round(v) + '';
+  return v.toFixed(1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RAYCASTER — hover tooltip & double-click placement
+═══════════════════════════════════════════════════════════════════════════ */
+
+const raycaster   = new THREE.Raycaster();
+const mouseNDC    = new THREE.Vector2();
+const cursorInfo  = document.getElementById('cursor-info');
+
+/**
+ * Convert a MouseEvent to normalised device coordinates relative
+ * to the renderer's canvas.
+ */
+function toNDC(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouseNDC.x = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+  mouseNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+renderer.domElement.addEventListener('mousemove', (e) => {
+  toNDC(e);
+  raycaster.setFromCamera(mouseNDC, camera);
+  const hits = raycaster.intersectObject(wallMesh);
+  if (hits.length === 0) { cursorInfo.style.display = 'none'; return; }
+  const pt = hits[0].point;
+  const wx = pt.x;
+  const wy = pt.y;
+  if (wx < 0 || wx > WALL_W_FT || wy < 0 || wy > WALL_H_FT) {
+    cursorInfo.style.display = 'none';
+    return;
+  }
+  let total = 0;
+  for (const l of lights) total += l.luxAt(wx, wy);
+  const rect = viewport.getBoundingClientRect();
+  cursorInfo.style.display = 'block';
+  cursorInfo.style.left    = (e.clientX - rect.left + 14) + 'px';
+  cursorInfo.style.top     = (e.clientY - rect.top  - 30) + 'px';
+  cursorInfo.textContent   =
+    Math.round(total).toLocaleString() + ' lux  ' +
+    '(' + wx.toFixed(2) + ' ft, ' + wy.toFixed(2) + ' ft)';
+});
+
+renderer.domElement.addEventListener('mouseleave', () => {
+  cursorInfo.style.display = 'none';
+});
+
+/** Double-click on the scene to place a new light near where you clicked */
+renderer.domElement.addEventListener('dblclick', (e) => {
+  toNDC(e);
+  raycaster.setFromCamera(mouseNDC, camera);
+
+  // Try hitting the wall plane first; fall back to a plane at Z=3
+  const wallHits = raycaster.intersectObject(wallMesh);
+  let x, y, z;
+  if (wallHits.length > 0) {
+    // Place just in front of the wall
+    x = Math.max(0, Math.min(WALL_W_FT, wallHits[0].point.x));
+    y = Math.max(0, Math.min(WALL_H_FT, wallHits[0].point.y));
+    z = 3;
+  } else {
+    // Intersect with Z=3 plane
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -3);
+    const hit   = new THREE.Vector3();
+    raycaster.ray.intersectPlane(plane, hit);
+    if (!hit) return;
+    x = Math.max(0, Math.min(WALL_W_FT, hit.x));
+    y = Math.max(0, Math.min(WALL_H_FT, hit.y));
+    z = 3;
+  }
+  addLight(x, y, z);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT MANAGEMENT
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Add a new light and select it.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ */
+function addLight(x = WALL_W_FT / 2, y = WALL_H_FT / 2, z = 3) {
+  const color = SWATCHES[swatchIdx % SWATCHES.length];
+  swatchIdx++;
+  const light = new LightSource(x, y, z, color, activeBulbId);
+  lights.push(light);
+  selectLight(light);
+  refreshLightList();
+  updateHeatmap();
+}
+
+/** Remove a light by id */
+function removeLight(id) {
+  const idx = lights.findIndex(l => l.id === id);
+  if (idx === -1) return;
+  lights[idx].dispose();
+  lights.splice(idx, 1);
+  if (selectedLight && selectedLight.id === id) {
+    selectedLight = null;
+    refreshSelPanel();
+  }
+  refreshLightList();
+  updateHeatmap();
+}
+
+/** Select a light and refresh the controls panel */
+function selectLight(light) {
+  selectedLight = light;
+  refreshSelPanel();
+  refreshLightList();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PANEL RENDERING
+═══════════════════════════════════════════════════════════════════════════ */
+
+/** Rebuild the list of light rows in the sidebar */
+function refreshLightList() {
+  const container = document.getElementById('light-list');
+  if (lights.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:12px">Double-click scene to add</p>';
+    return;
+  }
+  container.innerHTML = '';
+  lights.forEach(l => {
+    const row = document.createElement('div');
+    row.className = 'light-row' + (l === selectedLight ? ' selected' : '');
+    row.innerHTML =
+      `<div class="light-swatch" style="background:${l.color}"></div>` +
+      `<div class="light-name">${l.name}` +
+      `<br><span style="color:var(--muted);font-size:10px">${BULB_CATALOG[l.bulbId].label} · ${l.z.toFixed(1)}ft · ${l.pan}° pan · ${l.tilt}° tilt</span></div>` +
+      `<div class="light-del" data-id="${l.id}">×</div>`;
+
+    row.addEventListener('click', (e) => {
+      if (e.target.dataset.id) { removeLight(+e.target.dataset.id); return; }
+      selectLight(l);
+    });
+    container.appendChild(row);
+  });
+}
+
+/** Sync the slider values to the currently selected light */
+function refreshSelPanel() {
+  const section = document.getElementById('sel-section');
+  if (!selectedLight) {
+    section.classList.add('disabled');
+    return;
+  }
+  section.classList.remove('disabled');
+  const l = selectedLight;
+  setSlider('sl-x',      'v-x',      l.x,          v => v.toFixed(1));
+  setSlider('sl-y',      'v-y',      l.y,          v => v.toFixed(1));
+  setSlider('sl-z',      'v-z',      l.z,          v => v.toFixed(1));
+  setSlider('sl-pan',    'v-pan',    l.pan,        v => v + '°');
+  setSlider('sl-tilt',   'v-tilt',   l.tilt,       v => v + '°');
+  setSlider('sl-beam',   'v-beam',   l.beamDeg,    v => v + '°');
+  setSlider('sl-bright', 'v-bright', l.brightness, v => v + '%');
+  refreshSelBulbPicker();
+}
+
+function setSlider(sliderId, labelId, value, fmt) {
+  document.getElementById(sliderId).value         = value;
+  document.getElementById(labelId).textContent    = fmt(value);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SLIDER EVENT HANDLERS
+   All sliders update the selected light, rebuild helpers, and rerender.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Wire up a slider to update a property on the selected light.
+ * @param {string}   sliderId - element id
+ * @param {string}   labelId  - readout span id
+ * @param {string}   prop     - LightSource property name
+ * @param {Function} fmt      - value → display string
+ * @param {boolean}  rebuildCone - whether to rebuild the cone mesh
+ */
+function bindSlider(sliderId, labelId, prop, fmt, rebuildCone = false) {
+  document.getElementById(sliderId).addEventListener('input', (e) => {
+    if (!selectedLight) return;
+    const val = parseFloat(e.target.value);
+    selectedLight[prop] = val;
+    document.getElementById(labelId).textContent = fmt(val);
+    if (rebuildCone) selectedLight.update();
+    else             selectedLight._updateTransforms();
+    refreshLightList();
+    updateHeatmap();
+  });
+}
+
+bindSlider('sl-x',      'v-x',      'x',          v => v.toFixed(1));
+bindSlider('sl-y',      'v-y',      'y',          v => v.toFixed(1));
+bindSlider('sl-z',      'v-z',      'z',          v => v.toFixed(1));
+bindSlider('sl-pan',    'v-pan',    'pan',        v => v + '°',  false);
+bindSlider('sl-tilt',   'v-tilt',   'tilt',       v => v + '°',  false);
+bindSlider('sl-beam',   'v-beam',   'beamDeg',    v => v + '°',  true);
+bindSlider('sl-bright', 'v-bright', 'brightness', v => v + '%',  false);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BULB PICKER UI
+   Builds the global picker (for new lights) and the per-light picker
+   (inside the selected-light panel). Both share the same rendering helper.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Render bulb-option rows into a container element.
+ * @param {HTMLElement} container
+ * @param {string}      activeId    - currently active bulb id
+ * @param {function}    onSelect    - called with bulbId when user picks one
+ */
+function renderBulbPicker(container, activeId, onSelect) {
+  container.innerHTML = '';
+  Object.values(BULB_CATALOG).forEach(bulb => {
+    const div = document.createElement('div');
+    div.className = 'bulb-option' + (bulb.id === activeId ? ' active' : '');
+    div.innerHTML =
+      `<div class="bulb-radio"></div>` +
+      `<div class="bulb-info">` +
+        `<div class="bname">${bulb.label}</div>` +
+        `<div class="bdetail">${bulb.detail}</div>` +
+      `</div>`;
+    div.addEventListener('click', () => onSelect(bulb.id));
+    container.appendChild(div);
+  });
+}
+
+/** Rebuild the global (new-light) bulb picker */
+function refreshGlobalBulbPicker() {
+  renderBulbPicker(
+    document.getElementById('bulb-picker'),
+    activeBulbId,
+    (id) => {
+      activeBulbId = id;
+      refreshGlobalBulbPicker();
+      updateTopbarPill();
+    }
+  );
+}
+
+/** Rebuild the per-light bulb picker inside the selected-light panel */
+function refreshSelBulbPicker() {
+  const container = document.getElementById('sel-bulb-picker');
+  if (!selectedLight) { container.innerHTML = ''; return; }
+  renderBulbPicker(
+    container,
+    selectedLight.bulbId,
+    (id) => {
+      if (!selectedLight) return;
+      selectedLight.setBulb(id);
+      // Sync beam slider readout since beamDeg changed
+      document.getElementById('sl-beam').value          = selectedLight.beamDeg;
+      document.getElementById('v-beam').textContent     = selectedLight.beamDeg + '°';
+      refreshSelBulbPicker();
+      refreshLightList();
+      updateHeatmap();
+    }
+  );
+}
+
+/** Update the topbar pill to reflect the active global bulb */
+function updateTopbarPill() {
+  const bulb = BULB_CATALOG[activeBulbId];
+  document.getElementById('topbar-pill').textContent =
+    bulb.label + ' · ' + bulb.lumens.toLocaleString() + ' lm · ' + bulb.beamDeg + '° beam';
+}
+
+// Build pickers on load
+refreshGlobalBulbPicker();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PANEL TOP TAB SWITCHER
+   Switches between the light list pane and the bulb picker pane.
+   Both live in a fixed-height area so the controls below are always visible.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Switch the top panel between 'lights' and 'bulb' tabs.
+ * @param {'lights'|'bulb'} tab
+ */
+function switchPanelTab(tab) {
+  document.querySelectorAll('.ptab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.ptab-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('ptab-'  + tab).classList.add('active');
+  document.getElementById('ppane-' + tab).classList.add('active');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOOLBAR BUTTONS
+═══════════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('btn-add').addEventListener('click', () => addLight());
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  lights.slice().forEach(l => removeLight(l.id));
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ZONE VIEW
+   Flat 2D canvas showing green / yellow / red zones based on lux thresholds.
+   Shares the luxBuf computed in updateHeatmap() via a module-level cache.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Cached lux buffer (Float32Array, TEX_W × TEX_H) written by updateHeatmap().
+ * Zone view reads from this so we don't recompute the full lux grid twice.
+ * @type {Float32Array|null}
+ */
+let luxBufCache = null;
+
+/** Zone colour thresholds in lux — user-adjustable via sliders */
+const zoneThresh = { good: 2000, min: 1000 };
+
+/** Zone palette (RGBA as integers for fast pixel writes) */
+const ZONE_COLORS = {
+  good:  [34,  197,  94, 255],   // #22c55e – green
+  min:   [234, 179,   8, 255],   // #eab308 – yellow
+  insuf: [239,  68,  68, 255],   // #ef4444 – red
+  none:  [20,   22,  30, 255],   // dark bg when no lights
+};
+
+const zoneCanvas     = document.getElementById('zone-canvas');
+const zoneCtx        = zoneCanvas.getContext('2d');
+const zoneCursorInfo = document.getElementById('zone-cursor-info');
+const zoneCanvasWrap = document.getElementById('zone-canvas-wrap');
+
+/**
+ * Classify a lux value into a zone colour.
+ * @param {number} lux
+ * @returns {number[]} RGBA array
+ */
+function luxToZoneColor(lux) {
+  if (lights.length === 0) return ZONE_COLORS.none;
+  if (lux >= zoneThresh.good) return ZONE_COLORS.good;
+  if (lux >= zoneThresh.min)  return ZONE_COLORS.min;
+  return ZONE_COLORS.insuf;
+}
+
+/**
+ * Redraw the zone canvas from luxBufCache.
+ * Also updates coverage bar and legend labels.
+ */
+function renderZoneView() {
+  const W = zoneCanvas.width;
+  const H = zoneCanvas.height;
+
+  if (W === 0 || H === 0) return;
+
+  const imgData = zoneCtx.createImageData(W, H);
+  const px      = imgData.data;
+
+  // Coverage counters
+  let nGood = 0, nMin = 0, nInsuf = 0;
+  const total = TEX_W * TEX_H;
+
+  for (let ty = 0; ty < TEX_H; ty++) {
+    for (let tx = 0; tx < TEX_W; tx++) {
+      const lux = luxBufCache ? luxBufCache[ty * TEX_W + tx] : 0;
+      const col = luxToZoneColor(lux);
+
+      // Map texel → canvas pixel (nearest-neighbour stretch)
+      const cx0 = Math.round( tx      / TEX_W * W);
+      const cx1 = Math.round((tx + 1) / TEX_W * W);
+
+      // Zone canvas Y: ty=0 is bottom-of-wall in lux buffer (Y=0 ft).
+      // Canvas Y=0 is top, so we flip: canvasRow = TEX_H-1 - ty
+      const flippedTy = (TEX_H - 1 - ty);
+      const cy0 = Math.round( flippedTy      / TEX_H * H);
+      const cy1 = Math.round((flippedTy + 1) / TEX_H * H);
+
+      for (let cy = cy0; cy < cy1; cy++) {
+        for (let cx = cx0; cx < cx1; cx++) {
+          const i = (cy * W + cx) * 4;
+          px[i]     = col[0];
+          px[i + 1] = col[1];
+          px[i + 2] = col[2];
+          px[i + 3] = col[3];
+        }
+      }
+
+      // Tally coverage
+      if (lights.length > 0) {
+        if (lux >= zoneThresh.good)     nGood++;
+        else if (lux >= zoneThresh.min) nMin++;
+        else                            nInsuf++;
+      }
+    }
+  }
+
+  zoneCtx.putImageData(imgData, 0, 0);
+
+  // ── Draw wall grid lines ─────────────────────────────────────────────────
+  zoneCtx.strokeStyle = 'rgba(255,255,255,0.12)';
+  zoneCtx.lineWidth   = 0.5;
+  for (let i = 1; i < WALL_W_FT; i++) {
+    const cx = i / WALL_W_FT * W;
+    zoneCtx.beginPath(); zoneCtx.moveTo(cx, 0); zoneCtx.lineTo(cx, H); zoneCtx.stroke();
+  }
+  for (let j = 1; j < WALL_H_FT; j++) {
+    const cy = j / WALL_H_FT * H;
+    zoneCtx.beginPath(); zoneCtx.moveTo(0, cy); zoneCtx.lineTo(W, cy); zoneCtx.stroke();
+  }
+
+  // ── Draw light position markers ──────────────────────────────────────────
+  lights.forEach(l => {
+    const cx = (l.x / WALL_W_FT) * W;
+    const cy = (1 - l.y / WALL_H_FT) * H;   // flip Y
+    zoneCtx.beginPath();
+    zoneCtx.arc(cx, cy, 7, 0, Math.PI * 2);
+    zoneCtx.fillStyle   = l.color;
+    zoneCtx.fill();
+    zoneCtx.strokeStyle = '#fff';
+    zoneCtx.lineWidth   = 1.5;
+    zoneCtx.stroke();
+  });
+
+  // ── Update coverage bar ──────────────────────────────────────────────────
+  if (lights.length === 0 || total === 0) {
+    document.getElementById('cov-good').style.width  = '0%';
+    document.getElementById('cov-min').style.width   = '0%';
+    document.getElementById('cov-insuf').style.width = '100%';
+    document.getElementById('cov-good-pct').textContent  = '— good';
+    document.getElementById('cov-min-pct').textContent   = '— min';
+    document.getElementById('cov-insuf-pct').textContent = '— insuf';
+    return;
+  }
+
+  const pGood  = (nGood  / total * 100).toFixed(1);
+  const pMin   = (nMin   / total * 100).toFixed(1);
+  const pInsuf = (nInsuf / total * 100).toFixed(1);
+  document.getElementById('cov-good').style.width        = pGood  + '%';
+  document.getElementById('cov-min').style.width         = pMin   + '%';
+  document.getElementById('cov-insuf').style.width       = pInsuf + '%';
+  document.getElementById('cov-good-pct').textContent    = pGood  + '% good';
+  document.getElementById('cov-min-pct').textContent     = pMin   + '% min';
+  document.getElementById('cov-insuf-pct').textContent   = pInsuf + '% insuf';
+
+  // ── Update legend labels with current thresholds ─────────────────────────
+  document.getElementById('leg-good' ).textContent = `Good (≥${zoneThresh.good.toLocaleString()} lx)`;
+  document.getElementById('leg-min'  ).textContent = `Min (${zoneThresh.min.toLocaleString()}–${zoneThresh.good.toLocaleString()} lx)`;
+  document.getElementById('leg-insuf').textContent = `Insufficient (<${zoneThresh.min.toLocaleString()} lx)`;
+}
+
+/** Resize the zone canvas to fill its wrapper while preserving wall aspect ratio */
+function resizeZoneCanvas() {
+  const wrap     = zoneCanvasWrap;
+  const wrapW    = wrap.clientWidth;
+  const wrapH    = wrap.clientHeight;
+  const wallAR   = WALL_W_FT / WALL_H_FT;   // 11/7 ≈ 1.571
+
+  // Fit canvas inside wrapper (letterbox)
+  let canvasW, canvasH;
+  if (wrapW / wrapH > wallAR) {
+    // wrapper is wider than wall → constrained by height
+    canvasH = wrapH;
+    canvasW = Math.round(wrapH * wallAR);
+  } else {
+    // wrapper is taller than wall → constrained by width
+    canvasW = wrapW;
+    canvasH = Math.round(wrapW / wallAR);
+  }
+
+  zoneCanvas.width  = canvasW;
+  zoneCanvas.height = canvasH;
+  zoneCanvas.style.width  = canvasW + 'px';
+  zoneCanvas.style.height = canvasH + 'px';
+  renderZoneView();
+}
+
+// ── Zone canvas hover tooltip ──────────────────────────────────────────────
+zoneCanvas.addEventListener('mousemove', (e) => {
+  if (!luxBufCache) return;
+  const rect = zoneCanvas.getBoundingClientRect();
+  const cx   = e.clientX - rect.left;
+  const cy   = e.clientY - rect.top;
+  const wx   = (cx / rect.width)  * WALL_W_FT;
+  const wy   = (1 - cy / rect.height) * WALL_H_FT;   // flip Y: top=ceiling, bottom=floor
+
+  if (wx < 0 || wx > WALL_W_FT || wy < 0 || wy > WALL_H_FT) {
+    zoneCursorInfo.style.display = 'none';
+    return;
+  }
+
+  // Sample from luxBufCache at nearest texel
+  const tx  = Math.min(TEX_W - 1, Math.floor(wx / WALL_W_FT * TEX_W));
+  const ty  = Math.min(TEX_H - 1, Math.floor(wy / WALL_H_FT * TEX_H));
+  const lux = luxBufCache[ty * TEX_W + tx];
+
+  const zone = lux >= zoneThresh.good ? 'Good'
+             : lux >= zoneThresh.min  ? 'Minimum'
+             : 'Insufficient';
+
+  // Position tooltip relative to the canvas-wrap, not the canvas itself
+  const wrapRect = zoneCanvasWrap.getBoundingClientRect();
+  zoneCursorInfo.style.display = 'block';
+  zoneCursorInfo.style.left    = (e.clientX - wrapRect.left + 12) + 'px';
+  zoneCursorInfo.style.top     = (e.clientY - wrapRect.top  - 30) + 'px';
+  zoneCursorInfo.textContent   =
+    Math.round(lux).toLocaleString() + ' lux  ' +
+    zone + '  (' + wx.toFixed(1) + ' ft, ' + wy.toFixed(1) + ' ft)';
+});
+
+zoneCanvas.addEventListener('mouseleave', () => {
+  zoneCursorInfo.style.display = 'none';
+});
+
+// ── Threshold sliders ──────────────────────────────────────────────────────
+
+document.getElementById('sl-thresh-good').addEventListener('input', (e) => {
+  let val = parseInt(e.target.value, 10);
+  // Good threshold must stay above min threshold
+  if (val <= zoneThresh.min) { val = zoneThresh.min + 50; e.target.value = val; }
+  zoneThresh.good = val;
+  document.getElementById('v-thresh-good').textContent = val.toLocaleString();
+  renderZoneView();
+});
+
+document.getElementById('sl-thresh-min').addEventListener('input', (e) => {
+  let val = parseInt(e.target.value, 10);
+  // Min threshold must stay below good threshold
+  if (val >= zoneThresh.good) { val = zoneThresh.good - 50; e.target.value = val; }
+  zoneThresh.min = val;
+  document.getElementById('v-thresh-min').textContent = val.toLocaleString();
+  renderZoneView();
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VIEW SWITCHING
+═══════════════════════════════════════════════════════════════════════════ */
+
+/** @type {'3d'|'zone'} */
+let activeView = '3d';
+
+/**
+ * Switch between the 3D heatmap and flat zone view.
+ * @param {'3d'|'zone'} view
+ */
+function switchView(view) {
+  activeView = view;
+  const vp   = document.getElementById('viewport');
+  const zv   = document.getElementById('zone-view');
+  const t3d  = document.getElementById('tab-3d');
+  const tzone= document.getElementById('tab-zone');
+
+  if (view === '3d') {
+    vp.style.display   = 'block';
+    zv.classList.remove('visible');
+    t3d.classList.add('active');
+    tzone.classList.remove('active');
+    resize();   // restore Three.js renderer dimensions
+  } else {
+    vp.style.display   = 'none';
+    zv.classList.add('visible');
+    t3d.classList.remove('active');
+    tzone.classList.add('active');
+    // rAF ensures the browser has laid out the newly-visible flex container
+    // before we read its clientWidth / clientHeight
+    requestAnimationFrame(resizeZoneCanvas);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PATCH updateHeatmap to also cache luxBuf and refresh zone view
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Unified updateHeatmap: computes lux grid, writes heatmap texture,
+ * caches luxBuf for zone view, and updates all stats.
+ * Called whenever any light property changes.
+ */
+function updateHeatmap() {
+  // ── Recompute lux grid (duplicated here to populate luxBufCache) ─────────
+  // We recompute independently so the zone view has its own Float32 buffer
+  // without modifying the original function's internal locals.
+  const buf = new Float32Array(TEX_W * TEX_H);
+  let maxLux = 0, minLux = Infinity, sumLux = 0;
+
+  for (let ty = 0; ty < TEX_H; ty++) {
+    const wy = (ty + 0.5) / TEX_H * WALL_H_FT;
+    for (let tx = 0; tx < TEX_W; tx++) {
+      const wx    = (tx + 0.5) / TEX_W * WALL_W_FT;
+      let total   = 0;
+      for (const l of lights) total += l.luxAt(wx, wy);
+      buf[ty * TEX_W + tx] = total;
+      if (total > maxLux) maxLux = total;
+      if (total < minLux) minLux = total;
+      sumLux += total;
+    }
+  }
+
+  luxBufCache = buf;
+  maxLuxCache = maxLux || 1;
+
+  // ── Write RGBA heatmap pixels ────────────────────────────────────────────
+  for (let i = 0; i < TEX_W * TEX_H; i++) {
+    const t = Math.pow(buf[i] / maxLuxCache, 0.4);
+    const [r, g, b] = luxToRGB(t);
+    const p = i * 4;
+    heatData[p]     = r;
+    heatData[p + 1] = g;
+    heatData[p + 2] = b;
+    heatData[p + 3] = 255;
+  }
+
+  if (lights.length === 0) heatData.fill(18);
+  heatTex.needsUpdate = true;
+
+  // ── Stats panel ──────────────────────────────────────────────────────────
+  const count = TEX_W * TEX_H;
+  const avg   = sumLux / count;
+  const uni   = maxLux > 0 ? (minLux / maxLux * 100) : 0;
+
+  document.getElementById('stat-peak').textContent = lights.length ? fmt(maxLux) : '—';
+  document.getElementById('stat-avg' ).textContent = lights.length ? fmt(avg)    : '—';
+  document.getElementById('stat-min' ).textContent = lights.length ? fmt(minLux) : '—';
+  document.getElementById('stat-uni' ).textContent = lights.length ? Math.round(uni) + '%' : '—';
+  document.getElementById('leg-max'  ).textContent = lights.length ? fmt(maxLux) + ' lx' : '—';
+  document.getElementById('leg-mid'  ).textContent = lights.length ? fmt(maxLux / 2) + ' lx' : '—';
+
+  // ── Keep zone view in sync ────────────────────────────────────────────────
+  if (activeView === 'zone') renderZoneView();
+}
+
+// ── Sanity-check: verify cone rotation matches luxAt aim vector ──────────────
+// For pan=30°, tilt=20° the aim vector from luxAt should equal the direction
+// that the cone's local -Z maps to after _updateTransforms rotation.
+(function verifyConeAimAlignment() {
+  const pan = 30, tilt = 20;
+  const panR = pan * Math.PI / 180, tiltR = tilt * Math.PI / 180;
+
+  // Expected aim from luxAt math
+  const ex = Math.sin(panR) * Math.cos(tiltR);
+  const ey = Math.sin(tiltR);
+  const ez = -Math.cos(panR) * Math.cos(tiltR);
+
+  // Cone rotation: Euler YXZ, Y=-pan, X=tilt
+  const euler = new THREE.Euler(tiltR, -panR, 0, 'YXZ');
+  const q = new THREE.Quaternion().setFromEuler(euler);
+  const localNegZ = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+
+  const close = (a, b) => Math.abs(a - b) < 0.0001;
+  const ok = close(localNegZ.x, ex) && close(localNegZ.y, ey) && close(localNegZ.z, ez);
+  if (ok) {
+    console.log('[LuxSim] Cone ↔ luxAt alignment: PASS');
+  } else {
+    console.warn('[LuxSim] Cone ↔ luxAt alignment: MISMATCH',
+      'cone:', localNegZ, 'luxAt:', {x:ex, y:ey, z:ez});
+  }
+})();
+
+// ── Render loop ──────────────────────────────────────────────────────────────
+
+function resize() {
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+window.addEventListener('resize', () => {
+  resize();
+  if (activeView === 'zone') resizeZoneCanvas();
+});
+
+resize();
+
+// Initial render
+updateHeatmap();
+
+// Initial panel state
+document.getElementById('sel-section').classList.add('disabled');
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
